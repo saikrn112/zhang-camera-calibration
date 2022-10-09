@@ -79,10 +79,6 @@ def get_V_mat_element(H,i,j):
     v  = np.vstack((v1,v2,v3,v4,v5,v6))
     return v
 
-def getVij(hi, hj):
-    Vij = np.array([ hi[0]*hj[0], hi[0]*hj[1] + hi[1]*hj[0], hi[1]*hj[1], hi[2]*hj[0] + hi[0]*hj[2], hi[2]*hj[1] + hi[1]*hj[2], hi[2]*hj[2] ])
-    return Vij.T
-
 def get_V_mat(H):
     """
     description:
@@ -104,9 +100,13 @@ def get_V_mat(H):
     return V
 def get_L_mat(img_corner,world_corner):
     """
+    description:
+        calculate L for a given img_corner and world_corner
     input:
         image_corner  - 3, 
         world_corners - 3,
+    output:
+        L - as per paper convention 2 x 9
     """
     L1 = np.hstack((world_corner, np.zeros((3)), -img_corner[0]*world_corner))
     L2 = np.hstack((np.zeros((3)), world_corner, -img_corner[1]*world_corner))
