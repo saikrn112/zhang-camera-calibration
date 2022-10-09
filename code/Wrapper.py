@@ -68,26 +68,14 @@ def get_V_mat_element(H,i,j):
     # convering indices from paper convention to numpy convention
     i = i - 1
     j = j - 1
-    hi = H[:,i]
-    hj = H[:,j]
 
     # calculation vector v for a given homography
-    v1 = hi[0]*hj[0]
-#    v2 = hi[0]*hj[1] + hi[1]*hj[0]
-#    v3 = hi[1]*hj[1]                  
-#    v4 = hi[2]*hj[0] + hi[0]*hj[2]
-#    v5 = hi[2]*hj[1] + hi[1]*hj[2]
-#    v6 = hi[2]*hj[2]                  
-    print(H)
-    print(f"hi:{hi}")
-    v1 = H[i][0]*H[j][0]
-    print(f"hi:{H[i]}")
-    exit(1)
-    v2 = H[i][0]*H[j][1] + H[i][1]*H[j][0]
-    v3 = H[i][1]*H[j][1]
-    v4 = H[i][2]*H[j][0] + H[i][0]*H[j][2]
-    v5 = H[i][2]*H[j][1] + H[i][1]*H[j][2]
-    v6 = H[i][2]*H[j][2]
+    v1 = H[0][i]*H[0][j]
+    v2 = H[0][i]*H[1][j] + H[1][i]*H[0][j]
+    v3 = H[1][i]*H[1][j]                  
+    v4 = H[2][i]*H[0][j] + H[0][i]*H[2][j]
+    v5 = H[2][i]*H[1][j] + H[1][i]*H[2][j]
+    v6 = H[2][i]*H[2][j]
     v  = np.vstack((v1,v2,v3,v4,v5,v6))
     return v
 
@@ -112,15 +100,38 @@ def get_V_mat(H):
     V21 = V21.T # 1 x 6
     V2  = V20 - V21 # 1 x 6
     V   = np.vstack((V1,V2)) # 2 x 6
-    print(V)
 
     return V
+def get_L_mat(img_corner,world_corner):
+    """
+    input:
+        image_corner  - 3, 
+        world_corners - 3,
+    """
+    L1 = np.hstack((world_corner, np.zeros((3)), -img_corner[0]*world_corner))
+    L2 = np.hstack((np.zeros((3)), world_corner, -img_corner[1]*world_corner))
+    L  = np.vstack((L1,L2))
+    return L
 
 def get_homography(img_corners,world_corners,name):
-    H, _ = cv2.findHomography(img_corners,world_corners)
-    if H is None:
-        print(f"something went wrong while processing homography for {name}")
-        exit(1)
+    world_corners = np.hstack((world_corners,np.ones((world_corners.shape[0],1))))
+    img_corners   = img_corners.reshape((img_corners.shape[0],-1))
+    img_corners   = np.hstack((img_corners,np.ones((img_corners.shape[0],1))))
+    L = tuple([get_L_mat(img_corner,world_corner) for img_corner,world_corner in zip(img_corners,world_corners)]) # 2 x 9
+    L = np.vstack(L) # 2*N x 9
+    eig_val,eig_vec = np.linalg.eig(L.T @ L)
+    min_eig_vec_ind = np.argmin(eig_val) # 1 x 1
+    min_eig_vec     = eig_vec[:,min_eig_vec_ind] # 6 x 1
+    h1 = min_eig_vec[0:3]
+    h2 = min_eig_vec[3:6]
+    h3 = min_eig_vec[6:9]
+    H = np.vstack((h1,h2,h3))
+    H = H/H[2,2]
+
+#   H, _ = cv2.findHomography(img_corners,world_corners)
+#    if H is None:
+#        print(f"something went wrong while processing homography for {name}")
+#        exit(1)
     return H
 
 def get_camera_intrinsic_from_b(b):
@@ -216,7 +227,7 @@ def get_transformation_mat(A,lamda,H):
 
     lamda_check1 = 1/np.linalg.norm(A_inv @ H[:,0],ord=2)
     lamda_check2 = 1/np.linalg.norm(A_inv @ H[:,1],ord=2)
-    #print(f"{lamda_check1}=={lamda_check2}")
+    print(f"{lamda_check1}=={lamda_check2}")
     return R,t
 
 def projection_error_functional(x):
@@ -250,30 +261,21 @@ def main(args):
     imgs,imgs_names = get_images(base_path,input_extn)
 
     world_corners = get_world_corners(pattern_size,square_size)
-    #print(f"world_corners:{world_corners}")
 
     imgs_corners = [get_chessboard_corners(img,pattern_size,name,args) for img,name in zip(imgs,imgs_names)]
 
     homography_list = [get_homography(img_corners,world_corners,name) for img_corners,name in zip(imgs_corners,imgs_names)]
 
     A_estimate, lamda_estimate = get_camera_intrinsics(homography_list)
-    #print(f"K/A:\n{A_estimate}")
-    #print(f"lamda:\n{lamda_estimate}")
+    print(f"K/A:\n{A_estimate}")
+    print(f"lamda:\n{lamda_estimate}")
 
     R,t = get_transformation_mat(A_estimate,lamda_estimate,homography_list[0])
     
-    if args.debug:
-        R1 = np.hstack((R,np.expand_dims(t,axis=1)))
-        print(f"lamda:{lamda_estimate}")
-        print(f"R1:{R1}")
-        print(f"homo:\n{homography_list[0]}")
-        print((A_estimate@R1)/lamda_estimate)
-
     #scipy.optimize.least_squares(projection_error_functional,
 
 
     if args.debug:
-        print(f"{imgs_names[0]}")
         test_homography(imgs,imgs_names,homography_list)
 
     if args.display:
