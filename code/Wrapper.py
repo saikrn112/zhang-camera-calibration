@@ -103,7 +103,7 @@ def get_L_mat(img_corner,world_corner):
     description:
         calculate L for a given img_corner and world_corner
     input:
-        image_corner  - 3, 
+        image_corner  - 2,
         world_corners - 3,
     output:
         L - as per paper convention 2 x 9
@@ -116,15 +116,18 @@ def get_L_mat(img_corner,world_corner):
 def get_homography(img_corners,world_corners,name):
     world_corners = np.hstack((world_corners,np.ones((world_corners.shape[0],1))))
     img_corners   = img_corners.reshape((img_corners.shape[0],-1))
-    img_corners   = np.hstack((img_corners,np.ones((img_corners.shape[0],1))))
+
     L = tuple([get_L_mat(img_corner,world_corner) for img_corner,world_corner in zip(img_corners,world_corners)]) # 2 x 9
     L = np.vstack(L) # 2*N x 9
+
     eig_val,eig_vec = np.linalg.eig(L.T @ L)
     min_eig_vec_ind = np.argmin(eig_val) # 1 x 1
     min_eig_vec     = eig_vec[:,min_eig_vec_ind] # 6 x 1
+
     h1 = min_eig_vec[0:3]
     h2 = min_eig_vec[3:6]
     h3 = min_eig_vec[6:9]
+
     H = np.vstack((h1,h2,h3))
     H = H/H[2,2]
 
