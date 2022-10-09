@@ -68,16 +68,32 @@ def get_V_mat_element(H,i,j):
     # convering indices from paper convention to numpy convention
     i = i - 1
     j = j - 1
+    hi = H[:,i]
+    hj = H[:,j]
 
     # calculation vector v for a given homography
+    v1 = hi[0]*hj[0]
+#    v2 = hi[0]*hj[1] + hi[1]*hj[0]
+#    v3 = hi[1]*hj[1]                  
+#    v4 = hi[2]*hj[0] + hi[0]*hj[2]
+#    v5 = hi[2]*hj[1] + hi[1]*hj[2]
+#    v6 = hi[2]*hj[2]                  
+    print(H)
+    print(f"hi:{hi}")
     v1 = H[i][0]*H[j][0]
+    print(f"hi:{H[i]}")
+    exit(1)
     v2 = H[i][0]*H[j][1] + H[i][1]*H[j][0]
-    v3 = H[i][1]*H[j][1]                  
+    v3 = H[i][1]*H[j][1]
     v4 = H[i][2]*H[j][0] + H[i][0]*H[j][2]
     v5 = H[i][2]*H[j][1] + H[i][1]*H[j][2]
-    v6 = H[i][2]*H[j][2]                  
+    v6 = H[i][2]*H[j][2]
     v  = np.vstack((v1,v2,v3,v4,v5,v6))
     return v
+
+def getVij(hi, hj):
+    Vij = np.array([ hi[0]*hj[0], hi[0]*hj[1] + hi[1]*hj[0], hi[1]*hj[1], hi[2]*hj[0] + hi[0]*hj[2], hi[2]*hj[1] + hi[1]*hj[2], hi[2]*hj[2] ])
+    return Vij.T
 
 def get_V_mat(H):
     """
@@ -96,6 +112,8 @@ def get_V_mat(H):
     V21 = V21.T # 1 x 6
     V2  = V20 - V21 # 1 x 6
     V   = np.vstack((V1,V2)) # 2 x 6
+    print(V)
+
     return V
 
 def get_homography(img_corners,world_corners,name):
@@ -165,11 +183,10 @@ def get_camera_intrinsics(homography_list):
     V = np.vstack(V) # (2*N) x 6
     M = V.T @ V # 6 x 6
     U,sigma,R = np.linalg.svd(V)
-    print(f"V:{R}")
     eig_val,eig_vec = np.linalg.eig(V.T @ V) # 6 x 6
     min_eig_vec_ind = np.argmin(eig_val) # 1 x 1
     min_eig_vec     = eig_vec[:,min_eig_vec_ind] # 6 x 1
-    print(f"eig_vec:{min_eig_vec}")
+    #print(f"eig_vec:{min_eig_vec}")
     A = get_camera_intrinsic_from_b(min_eig_vec) # 3 x 3
     return A
 
@@ -195,11 +212,11 @@ def get_transformation_mat(A,lamda,H):
     r3 = skew(r1) @ r2 # 3 x 1
     t  = lamda*A_inv @ H[:,2] # 3 x 1
     R  = np.vstack((r1,r2,r3)).T
-    print(f"R_compute:\n{R}")
+    #print(f"R_compute:\n{R}")
 
     lamda_check1 = 1/np.linalg.norm(A_inv @ H[:,0],ord=2)
     lamda_check2 = 1/np.linalg.norm(A_inv @ H[:,1],ord=2)
-    print(f"{lamda_check1}=={lamda_check2}")
+    #print(f"{lamda_check1}=={lamda_check2}")
     return R,t
 
 def projection_error_functional(x):
@@ -240,8 +257,8 @@ def main(args):
     homography_list = [get_homography(img_corners,world_corners,name) for img_corners,name in zip(imgs_corners,imgs_names)]
 
     A_estimate, lamda_estimate = get_camera_intrinsics(homography_list)
-    print(f"K/A:\n{A_estimate}")
-    print(f"lamda:\n{lamda_estimate}")
+    #print(f"K/A:\n{A_estimate}")
+    #print(f"lamda:\n{lamda_estimate}")
 
     R,t = get_transformation_mat(A_estimate,lamda_estimate,homography_list[0])
     
