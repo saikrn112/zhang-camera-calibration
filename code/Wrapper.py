@@ -21,7 +21,9 @@ def get_chessboard_corners(img_color,pattern_size,name,args):
     if args.debug:
         cv2.imshow(f"{name}_gray",img_gray)
 
-    chessboard_flags = cv2.CALIB_CB_ADAPTIVE_THRESH + cv2.CALIB_CB_NORMALIZE_IMAGE + cv2.CALIB_CB_FAST_CHECK
+    chessboard_flags = cv2.CALIB_CB_ADAPTIVE_THRESH     \
+                        + cv2.CALIB_CB_NORMALIZE_IMAGE  \
+                        + cv2.CALIB_CB_FAST_CHECK       
     ret, corners = cv2.findChessboardCorners(img_gray,pattern_size,flags=chessboard_flags)
     if not ret:
         print(f"something went wrong while processing {name}")
@@ -162,17 +164,20 @@ def get_camera_intrinsics(homography_list):
     V = tuple([get_V_mat(H) for H in homography_list]) # N, 2 x 6
     V = np.vstack(V) # (2*N) x 6
     M = V.T @ V # 6 x 6
+    U,sigma,R = np.linalg.svd(V)
+    print(f"V:{R}")
     eig_val,eig_vec = np.linalg.eig(V.T @ V) # 6 x 6
     min_eig_vec_ind = np.argmin(eig_val) # 1 x 1
     min_eig_vec     = eig_vec[:,min_eig_vec_ind] # 6 x 1
+    print(f"eig_vec:{min_eig_vec}")
     A = get_camera_intrinsic_from_b(min_eig_vec) # 3 x 3
     return A
 
 
 def test_homography(imgs,imgs_names,homography_list):
-    H = homography_list[0].copy()
-    img1_warp = cv2.warpPerspective(imgs[0],H,[imgs[0].shape[1],imgs[0].shape[0]])
-    cv2.imshow(f"warp1_{imgs_names[0]}",img1_warp)
+    for i,H in enumerate(homography_list):
+        img1_warp = cv2.warpPerspective(imgs[i],H,[imgs[i].shape[1],imgs[i].shape[0]])
+        cv2.imshow(f"warp1_{imgs_names[i]}",img1_warp)
 
 
 def get_transformation_mat(A,lamda,H):
@@ -189,12 +194,34 @@ def get_transformation_mat(A,lamda,H):
     r2 = lamda*A_inv @ H[:,1] # 3 x 1
     r3 = skew(r1) @ r2 # 3 x 1
     t  = lamda*A_inv @ H[:,2] # 3 x 1
-    R  = np.vstack((r1,r2,r3))
+    R  = np.vstack((r1,r2,r3)).T
+    print(f"R_compute:\n{R}")
 
     lamda_check1 = 1/np.linalg.norm(A_inv @ H[:,0],ord=2)
     lamda_check2 = 1/np.linalg.norm(A_inv @ H[:,1],ord=2)
     print(f"{lamda_check1}=={lamda_check2}")
     return R,t
+
+def projection_error_functional(x):
+    """
+    description:
+        callable functional for optimizing intrinsics and extrinsincs
+    input:
+        x - 14, vector of all parameters
+    """
+    A_elems = x[0:5]
+    alpha,gamma,beta,u0,v0 = A_elems
+    A1 = [alpha,gamma,u0]
+    A2 = [  0  ,beta ,v0]
+    A3 = [  0  ,  0  , 1]
+    A  = np.vstack((A1,A2,A3))
+
+    r1 = x[5:8]
+    r2 = x[8:11]
+    t  = x[11:14]
+
+
+
 
 def main(args):
     # parameters
@@ -206,20 +233,31 @@ def main(args):
     imgs,imgs_names = get_images(base_path,input_extn)
 
     world_corners = get_world_corners(pattern_size,square_size)
+    #print(f"world_corners:{world_corners}")
 
     imgs_corners = [get_chessboard_corners(img,pattern_size,name,args) for img,name in zip(imgs,imgs_names)]
 
     homography_list = [get_homography(img_corners,world_corners,name) for img_corners,name in zip(imgs_corners,imgs_names)]
 
-
     A_estimate, lamda_estimate = get_camera_intrinsics(homography_list)
-    #print(A_estimate,lamda_estimate)
+    print(f"K/A:\n{A_estimate}")
+    print(f"lamda:\n{lamda_estimate}")
+
     R,t = get_transformation_mat(A_estimate,lamda_estimate,homography_list[0])
-    print(homography_list[0])
-    print(R)
-    print(t)
-    R1 = np.hstack((R,np.expand_dims(t,axis=1)))
-    print((A_estimate@R1)/lamda_estimate)
+    
+    if args.debug:
+        R1 = np.hstack((R,np.expand_dims(t,axis=1)))
+        print(f"lamda:{lamda_estimate}")
+        print(f"R1:{R1}")
+        print(f"homo:\n{homography_list[0]}")
+        print((A_estimate@R1)/lamda_estimate)
+
+    #scipy.optimize.least_squares(projection_error_functional,
+
+
+    if args.debug:
+        print(f"{imgs_names[0]}")
+        test_homography(imgs,imgs_names,homography_list)
 
     if args.display:
         cv2.waitKey(0)
