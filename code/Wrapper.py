@@ -2,10 +2,26 @@ import numpy as np
 import cv2
 import argparse
 import glob
+from scipy.spatial.transform import Rotation as scipyRot
+from scipy.optimize import least_squares
+
 def skew(x):
     return np.array([[0, -x[2], x[1]],
                      [x[2], 0, -x[0]],
                      [-x[1], x[0], 0]])
+
+def convert_A_to_vector(A):
+    return np.array([A[0,0],A[0,1],A[1,1],A[0,2],A[1,2]])
+
+def convert_A_vector_to_matrix(a):
+    alpha,gamma,beta,u0,v0 = a
+    A1 = [alpha,gamma,u0]
+    A2 = [  0  ,beta ,v0]
+    A3 = [  0  ,  0  , 1]
+
+    A  = np.vstack((A1,A2,A3)) # 3 x 3
+    return A
+
 
 def get_images(base_path,input_extn):
     img_files = glob.glob(f"{base_path}/*{input_extn}",recursive=False)
@@ -25,6 +41,7 @@ def get_chessboard_corners(img_color,pattern_size,name,args):
                         + cv2.CALIB_CB_NORMALIZE_IMAGE  \
                         + cv2.CALIB_CB_FAST_CHECK       
     ret, corners = cv2.findChessboardCorners(img_gray,pattern_size,flags=chessboard_flags)
+    # TODO cv2.cornerSubPix
     if not ret:
         print(f"something went wrong while processing {name}")
         exit(1)
@@ -33,6 +50,7 @@ def get_chessboard_corners(img_color,pattern_size,name,args):
         chessboard_img = cv2.drawChessboardCorners(img_color,pattern_size,corners,ret)
         cv2.imshow(f"{name}_chessboard",chessboard_img)
 
+    corners = corners.reshape((corners.shape[0],-1))
     return corners
 
 def get_world_corners(pattern_size,square_size):
@@ -115,7 +133,6 @@ def get_L_mat(img_corner,world_corner):
 
 def get_homography(img_corners,world_corners,name):
     world_corners = np.hstack((world_corners,np.ones((world_corners.shape[0],1))))
-    img_corners   = img_corners.reshape((img_corners.shape[0],-1))
 
     L = tuple([get_L_mat(img_corner,world_corner) for img_corner,world_corner in zip(img_corners,world_corners)]) # 2 x 9
     L = np.vstack(L) # 2*N x 9
@@ -130,6 +147,7 @@ def get_homography(img_corners,world_corners,name):
 
     H = np.vstack((h1,h2,h3))
     H = H/H[2,2]
+    # TODO optimize using LV MINPACK
 
 #   H, _ = cv2.findHomography(img_corners,world_corners)
 #    if H is None:
@@ -177,10 +195,7 @@ def get_camera_intrinsic_from_b(b):
     u01 = (B13*alpha*alpha)/lamda
     u0  = u00 - u01
 
-    A1 = [alpha,gamma,u0]
-    A2 = [  0  ,beta ,v0]
-    A3 = [  0  ,  0  , 1]
-    A  = np.vstack((A1,A2,A3))
+    A  = convert_A_vector_to_matrix([alpha,gamma,beta,u0,v0])
     return A, lamda
     
 
@@ -216,43 +231,85 @@ def get_transformation_mat(A,lamda,H):
     description:
         calculate rotation and translation matrices for each image
     input:
-        homography_list - list of size N homography matrices 3 x 3
     output:
-        A - camera intrinsic matrix 3 x 3
     """
     A_inv = np.linalg.inv(A) # should be perfectly invertible
-    r1 = lamda*A_inv @ H[:,0] # 3 x 1
-    r2 = lamda*A_inv @ H[:,1] # 3 x 1
+    lamda1 = 1/np.linalg.norm(A_inv @ H[:,0],ord=2)
+    lamda2 = 1/np.linalg.norm(A_inv @ H[:,1],ord=2)
+
+    r1 = lamda1*A_inv @ H[:,0] # 3 x 1
+    r2 = lamda1*A_inv @ H[:,1] # 3 x 1
     r3 = skew(r1) @ r2 # 3 x 1
-    t  = lamda*A_inv @ H[:,2] # 3 x 1
+
+    t  = lamda1*A_inv @ H[:,2] # 3 x 1
+
     R  = np.vstack((r1,r2,r3)).T
-    #print(f"R_compute:\n{R}")
+    r  = scipyRot.from_matrix(R).as_mrp() # 3,
 
-    lamda_check1 = 1/np.linalg.norm(A_inv @ H[:,0],ord=2)
-    lamda_check2 = 1/np.linalg.norm(A_inv @ H[:,1],ord=2)
-    print(f"{lamda_check1}=={lamda_check2}")
-    return R,t
+    rt = np.concatenate((r,t.flatten()),axis=0).tolist() # 6,
 
-def projection_error_functional(x):
+    return rt
+
+def projection_error(x,A,img_corners,world_corners):
     """
     description:
-        callable functional for optimizing intrinsics and extrinsincs
+        computes projection error for an image
     input:
-        x - 14, vector of all parameters
+        x - 6, vector of all parameters
+        img_corners - M x 2 
+        world_corners - M x 2
+    output:
+        residuals - 14,1
     """
-    A_elems = x[0:5]
-    alpha,gamma,beta,u0,v0 = A_elems
-    A1 = [alpha,gamma,u0]
-    A2 = [  0  ,beta ,v0]
-    A3 = [  0  ,  0  , 1]
-    A  = np.vstack((A1,A2,A3))
+    R  = scipyRot.from_mrp(x[0:3]).as_matrix() # 3 x 3
+    t  = x[3:6].reshape((3,1)) # 3 x 1
+    T  = np.hstack((R,t)) # 3 x 4
+    
+    M = world_corners.shape[0]
+    zeros = np.zeros((M,1))
+    ones  = np.ones((M,1))
+    world_corners = np.hstack((world_corners,zeros,ones)).T # 4 x M
+    img_corners = np.hstack((img_corners,ones)).T # 3 x M
 
-    r1 = x[5:8]
-    r2 = x[8:11]
-    t  = x[11:14]
+    m_hat = A @ T @ world_corners # 3 x 3 @ 3 x 4 @ 4 x M =  3 x M
+    m_hat = m_hat/m_hat[2]
 
+    error = img_corners - m_hat # 3 x M
+    error = np.sum(error,axis=0) # M,
+    return error 
 
+def compute_residuals(x,imgs_corners,world_corners):
+    """
+    description: 
+        callable functional to calcuate residuals
+    input:
+        if N - number of images
+            M - number of features per image
+            nP - number of parameters required for transformation
+                = 3(rotation rodrigues) + 3(translation)
+        x - 5(intrinsics) + N*nP
+        imgs_corners - N x M x 2
+        world_corners - M x 2
+    output:
+        residuals - N*M*nP
+    """
 
+    n_imgs = len(imgs_corners)
+    n_feats = len(world_corners)
+
+    A = convert_A_vector_to_matrix(x[0:5]) 
+
+    transformation_params = x[5:] # N*M*nP
+
+    x = transformation_params.reshape((n_imgs,6)) # N*M x 6
+
+    errors= [] # N
+    for i in range(x.shape[0]):
+        error = projection_error(x[i,:],A,imgs_corners[i],world_corners) # M,
+        errors.append(error)
+
+    errors = np.concatenate(errors) # N*M,
+    return errors
 
 def main(args):
     # parameters
@@ -271,11 +328,18 @@ def main(args):
 
     A_estimate, lamda_estimate = get_camera_intrinsics(homography_list)
     print(f"K/A:\n{A_estimate}")
-    print(f"lamda:\n{lamda_estimate}")
 
-    R,t = get_transformation_mat(A_estimate,lamda_estimate,homography_list[0])
+    transformations = tuple([get_transformation_mat(A_estimate,lamda_estimate,H) for H in homography_list]) # 13*6,
+    transformations = np.concatenate(transformations)
+
+    a  = convert_A_to_vector(A_estimate) # 5,
+    x0 = np.concatenate((a,transformations)) # 83,
+
+    kwargs1 = {"imgs_corners":imgs_corners, "world_corners":world_corners}
     
-    #scipy.optimize.least_squares(projection_error_functional,
+    result = least_squares(compute_residuals,x0=x0,method='lm',kwargs=kwargs1)
+
+    print(convert_A_vector_to_matrix(result.x[0:5]))
 
 
     if args.debug:
