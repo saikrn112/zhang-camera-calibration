@@ -249,13 +249,32 @@ def get_transformation_mat(A,lamda,H):
     rt = np.concatenate((r,t.flatten()),axis=0).tolist() # 6,
 
     return rt
+def distort_corners(x_c,k1,k2):
+    """
+    description:
+        distort corners based on the k1 and k2
+    input:
+        x_c - 3 x M
+        k1 - distortion coefficient 1
+    output:
+        x_d - 3 x M
+    """
+    #Distortion corrfs [[ 2.90493410e-01 -2.42737867e+00  2.70529992e-03  9.61801220e-04                                        6.52472281e+00]]
+    x_c   = x_c/x_c[2]
+    r_c2   = x_c[0]**2 + x_c[1]**2
+    factor = k1*r_c2 + k2*(r_c2**2)
+    x_h   = x_c + x_c*factor
+    x_h[2] = 1
+    return x_h
 
-def projection_error(x,A,img_corners,world_corners):
+
+def projection_error(x,A,k1,k2,img_corners,world_corners):
     """
     description:
         computes projection error for an image
     input:
-        x - 6, vector of all parameters
+        x - 6, vector of all transformation parameters
+        k1,k2 - distortion coefficients
         img_corners - M x 2 
         world_corners - M x 2
     output:
@@ -271,7 +290,9 @@ def projection_error(x,A,img_corners,world_corners):
     world_corners = np.hstack((world_corners,zeros,ones)).T # 4 x M
     img_corners = np.hstack((img_corners,ones)).T # 3 x M
 
-    m_hat = A @ T @ world_corners # 3 x 3 @ 3 x 4 @ 4 x M =  3 x M
+    x_c   = T @ world_corners # 3 x 4 @ 4 x M = 3 x M
+    x_h   = distort_corners(x_c,k1,k2) # 3 x M
+    m_hat = A @ x_h # 3 x 3 @ 3 x M =  3 x M
     m_hat = m_hat/m_hat[2]
 
     error = img_corners - m_hat # 3 x M
@@ -287,7 +308,7 @@ def compute_residuals(x,imgs_corners,world_corners):
             M - number of features per image
             nP - number of parameters required for transformation
                 = 3(rotation rodrigues) + 3(translation)
-        x - 5(intrinsics) + N*nP
+        x - 5(intrinsics) + 2(distortion) + N*nP
         imgs_corners - N x M x 2
         world_corners - M x 2
     output:
@@ -298,18 +319,53 @@ def compute_residuals(x,imgs_corners,world_corners):
     n_feats = len(world_corners)
 
     A = convert_A_vector_to_matrix(x[0:5]) 
+    k1 = x[5]
+    k2 = x[6]
 
-    transformation_params = x[5:] # N*M*nP
+    transformation_params = x[7:] # N*M*nP
 
     x = transformation_params.reshape((n_imgs,6)) # N*M x 6
 
     errors= [] # N
     for i in range(x.shape[0]):
-        error = projection_error(x[i,:],A,imgs_corners[i],world_corners) # M,
+        error = projection_error(x[i,:],A,k1,k2,imgs_corners[i],world_corners) # M,
         errors.append(error)
 
     errors = np.concatenate(errors) # N*M,
     return errors
+
+def inverse_warp(old_img,A,k1,k2):
+    """
+    """
+    u_lin = np.arange(0,old_img.shape[1]+1,1)
+    v_lin = np.arange(0,old_img.shape[0]+1,1)
+    u_grid,v_grid = np.meshgrid(u_lin,v_lin)
+    u_grid = u_grid.flatten()
+    v_grid = v_grid.flatten()
+
+    alpha,gamma,beta,u0,v0 = convert_A_to_vector(A)
+    res_u = ((u_grid - u0)/alpha)
+    res_v = ((v_grid - v0)/beta)
+    
+    r_2 = res_u**2 + res_v**2
+    r_4 = r_2**2
+    factor = k1*r_2 + k2*r_4
+
+    u_grid_old = u_grid + (u_grid - u0)*factor
+    v_grid_old = v_grid + (v_grid - v0)*factor
+
+    u_grid_old = u_grid_old.astype(int)
+    v_grid_old = v_grid_old.astype(int)
+    coords = np.hstack((u_grid_old,v_grid_old))
+    inds_max = np.argwhere(v_grid_old>old_img.shape[0]-1)
+    inds_max = np.argwhere(u_grid_old>old_img.shape[1]-1)
+    print(inds_max.shape)
+    exit(1)
+
+    new_img = np.zeros_like(old_img)
+    old_img[v_grid_old,u_grid_old,:]
+    new_img[v_grid,u_grid,:] = old_img[v_grid_old,u_grid_old,:]
+    return new_img
 
 def main(args):
     # parameters
@@ -333,13 +389,24 @@ def main(args):
     transformations = np.concatenate(transformations)
 
     a  = convert_A_to_vector(A_estimate) # 5,
-    x0 = np.concatenate((a,transformations)) # 83,
+    k1 = np.array([0])
+    k2 = np.array([0])
+    x0 = np.concatenate((a,k1,k2,transformations)) # 83,
 
     kwargs1 = {"imgs_corners":imgs_corners, "world_corners":world_corners}
     
     result = least_squares(compute_residuals,x0=x0,method='lm',kwargs=kwargs1)
 
-    print(convert_A_vector_to_matrix(result.x[0:5]))
+    A_final = convert_A_vector_to_matrix(result.x[0:5])
+    k1 = result.x[5]
+    k2 = result.x[6]
+    print(f"A_final:\n{A_final}")
+    print(f"k1:{k1}")
+    print(f"k2:{k2}")
+
+#    new_img = inverse_warp(imgs[0],A_final,k1,k2)
+#    cv2.imshow("old_img",imgs[0])
+#    cv2.imshow("new_img",new_img)
 
 
     if args.debug:
