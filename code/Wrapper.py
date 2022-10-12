@@ -324,7 +324,7 @@ def compute_residuals(x,imgs_corners,world_corners):
 
     transformation_params = x[7:] # N*M*nP
 
-    x = transformation_params.reshape((n_imgs,6)) # N*M x 6
+    x = transformation_params.reshape((n_imgs,6)) # N x 6
 
     errors= [] # N
     for i in range(x.shape[0]):
@@ -334,11 +334,37 @@ def compute_residuals(x,imgs_corners,world_corners):
     errors = np.concatenate(errors) # N*M,
     return errors
 
-def inverse_warp(old_img,A,k1,k2):
+def filter_coords(u_grid_old,v_grid_old,u_grid,v_grid,img_shape):
+    inds_max_v = np.argwhere(v_grid_old>img_shape[0]-1)
+    inds_max_u = np.argwhere(u_grid_old>img_shape[1]-1)
+
+    inds_max  = np.concatenate((inds_max_v,inds_max_u)).flatten().tolist()
+    exclude_inds = list(set(tuple(inds_max)))
+    exclude_inds = np.array(exclude_inds)
+    if exclude_inds.shape[0] <=0:
+        return u_grid_old,v_grid_old,u_grid,v_grid
+
+    u_grid_old = np.delete(u_grid_old,exclude_inds, axis=0)
+    v_grid_old = np.delete(v_grid_old,exclude_inds, axis=0)
+    u_grid = np.delete(u_grid,exclude_inds, axis=0)
+    v_grid = np.delete(v_grid,exclude_inds, axis=0)
+
+    return u_grid_old,v_grid_old,u_grid,v_grid
+
+def inverse_warp(img,A,k1,k2):
     """
+    description:
+        inverse warp the img based on the instrinsics and extrinsincs
+    input:
+        img - original img
+        A - camera intrinsics
+        k1 - distortion parameter 1
+        k2 - distortion parameter 1
+    output:
+        rectified_img - image after rectification
     """
-    u_lin = np.arange(0,old_img.shape[1]+1,1)
-    v_lin = np.arange(0,old_img.shape[0]+1,1)
+    u_lin = np.arange(0,img.shape[1],1)
+    v_lin = np.arange(0,img.shape[0],1)
     u_grid,v_grid = np.meshgrid(u_lin,v_lin)
     u_grid = u_grid.flatten()
     v_grid = v_grid.flatten()
@@ -356,15 +382,11 @@ def inverse_warp(old_img,A,k1,k2):
 
     u_grid_old = u_grid_old.astype(int)
     v_grid_old = v_grid_old.astype(int)
-    coords = np.hstack((u_grid_old,v_grid_old))
-    inds_max = np.argwhere(v_grid_old>old_img.shape[0]-1)
-    inds_max = np.argwhere(u_grid_old>old_img.shape[1]-1)
-    print(inds_max.shape)
-    exit(1)
 
-    new_img = np.zeros_like(old_img)
-    old_img[v_grid_old,u_grid_old,:]
-    new_img[v_grid,u_grid,:] = old_img[v_grid_old,u_grid_old,:]
+    u_grid_old,v_grid_old,u_grid,v_grid = filter_coords(u_grid_old,v_grid_old,u_grid,v_grid,img.shape)
+
+    new_img = np.zeros_like(img)
+    new_img[v_grid,u_grid,:] = img[v_grid_old,u_grid_old,:]
     return new_img
 
 def main(args):
@@ -400,15 +422,22 @@ def main(args):
     A_final = convert_A_vector_to_matrix(result.x[0:5])
     k1 = result.x[5]
     k2 = result.x[6]
+    #print(f"result:{result}")
     print(f"A_final:\n{A_final}")
     print(f"k1:{k1}")
     print(f"k2:{k2}")
 
-#    new_img = inverse_warp(imgs[0],A_final,k1,k2)
-#    cv2.imshow("old_img",imgs[0])
-#    cv2.imshow("new_img",new_img)
+    #D = np.array([k1,k2, 0, 0] , np.float32)
+    #cv2_new_img = cv2.undistort(imgs[0],A_final,D)
+
+    distorted_imgs = [inverse_warp(img,A_final,k1,k2) for img in imgs]
 
 
+    n_imgs = len(imgs)
+    transformations = transformations.reshape((n_imgs,6)) # N x 6
+    projection_errors = [projection_error(x,A_final,k1,k2,img_corners,world_corners) for x,img_corners in zip(transformations,imgs_corners)]
+
+    #print(projection_errors)
     if args.debug:
         test_homography(imgs,imgs_names,homography_list)
 
