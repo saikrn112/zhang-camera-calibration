@@ -10,7 +10,7 @@ def skew(x):
                      [x[2], 0, -x[0]],
                      [-x[1], x[0], 0]])
 
-def convert_A_to_vector(A):
+def convert_A_matrix_to_vector(A):
     return np.array([A[0,0],A[0,1],A[1,1],A[0,2],A[1,2]])
 
 def convert_A_vector_to_matrix(a):
@@ -21,6 +21,13 @@ def convert_A_vector_to_matrix(a):
 
     A  = np.vstack((A1,A2,A3)) # 3 x 3
     return A
+
+def draw_circles(img,base_path,name,m_new,m_old):
+    for x,y,_ in m_new.T:
+        cv2.circle(img,(int(x),int(y)),0,(255,0,0),30)
+    for x,y in m_old:
+        cv2.circle(img,(int(x),int(y)),0,(0,255,0),15)
+    cv2.imwrite(f"{base_path}/rectified/{name}.png",img)
 
 
 def get_images(base_path,input_extn):
@@ -267,6 +274,21 @@ def distort_corners(x_c,k1,k2):
     x_h[2] = 1
     return x_h
 
+def get_projection(x,A,k1,k2,world_corners):
+    R  = scipyRot.from_mrp(x[0:3]).as_matrix() # 3 x 3
+    t  = x[3:6].reshape((3,1)) # 3 x 1
+    T  = np.hstack((R,t)) # 3 x 4
+    
+    M = world_corners.shape[0]
+    zeros = np.zeros((M,1))
+    ones  = np.ones((M,1))
+    world_corners = np.hstack((world_corners,zeros,ones)).T # 4 x M
+
+    x_c   = T @ world_corners # 3 x 4 @ 4 x M = 3 x M
+    x_h   = distort_corners(x_c,k1,k2) # 3 x M
+    m_hat = A @ x_h # 3 x 3 @ 3 x M =  3 x M
+    m_hat = m_hat/m_hat[2]
+    return m_hat
 
 def projection_error(x,A,k1,k2,img_corners,world_corners):
     """
@@ -280,26 +302,23 @@ def projection_error(x,A,k1,k2,img_corners,world_corners):
     output:
         residuals - 14,1
     """
-    R  = scipyRot.from_mrp(x[0:3]).as_matrix() # 3 x 3
-    t  = x[3:6].reshape((3,1)) # 3 x 1
-    T  = np.hstack((R,t)) # 3 x 4
-    
+    m_hat = get_projection(x,A,k1,k2,world_corners)
     M = world_corners.shape[0]
-    zeros = np.zeros((M,1))
     ones  = np.ones((M,1))
-    world_corners = np.hstack((world_corners,zeros,ones)).T # 4 x M
     img_corners = np.hstack((img_corners,ones)).T # 3 x M
 
-    x_c   = T @ world_corners # 3 x 4 @ 4 x M = 3 x M
-    x_h   = distort_corners(x_c,k1,k2) # 3 x M
-    m_hat = A @ x_h # 3 x 3 @ 3 x M =  3 x M
-    m_hat = m_hat/m_hat[2]
-
-    error = img_corners - m_hat # 3 x M
-    error = np.sum(error,axis=0) # M,
+    error = img_corners - m_hat
+    print(error.shape)
+    error = np.linalg.norm(error,axis=0,ord=2)
+    print(error.shape)
+    exit(1)
+    error = error**2
+    error = np.sum(error,axis=0)
+    error = np.sqrt(error)
+    error = np.sum(error)
     return error 
 
-def compute_residuals(x,imgs_corners,world_corners):
+def compute_residuals(x,imgs_corners,world_corners,transformations):
     """
     description: 
         callable functional to calcuate residuals
@@ -323,6 +342,7 @@ def compute_residuals(x,imgs_corners,world_corners):
     k2 = x[6]
 
     transformation_params = x[7:] # N*M*nP
+    #transformation_params = transformations
 
     x = transformation_params.reshape((n_imgs,6)) # N x 6
 
@@ -331,7 +351,7 @@ def compute_residuals(x,imgs_corners,world_corners):
         error = projection_error(x[i,:],A,k1,k2,imgs_corners[i],world_corners) # M,
         errors.append(error)
 
-    errors = np.concatenate(errors) # N*M,
+    errors = np.array(errors) # N*M,
     return errors
 
 def filter_coords(u_grid_old,v_grid_old,u_grid,v_grid,img_shape):
@@ -369,7 +389,7 @@ def inverse_warp(img,A,k1,k2):
     u_grid = u_grid.flatten()
     v_grid = v_grid.flatten()
 
-    alpha,gamma,beta,u0,v0 = convert_A_to_vector(A)
+    alpha,gamma,beta,u0,v0 = convert_A_matrix_to_vector(A)
     res_u = ((u_grid - u0)/alpha)
     res_v = ((v_grid - v0)/beta)
     
@@ -410,12 +430,13 @@ def main(args):
     transformations = tuple([get_transformation_mat(A_estimate,lamda_estimate,H) for H in homography_list]) # 13*6,
     transformations = np.concatenate(transformations)
 
-    a  = convert_A_to_vector(A_estimate) # 5,
+    a  = convert_A_matrix_to_vector(A_estimate) # 5,
     k1 = np.array([0])
     k2 = np.array([0])
     x0 = np.concatenate((a,k1,k2,transformations)) # 83,
+    #x0 = np.concatenate((a,k1,k2))
 
-    kwargs1 = {"imgs_corners":imgs_corners, "world_corners":world_corners}
+    kwargs1 = {"imgs_corners":imgs_corners, "world_corners":world_corners, "transformations":transformations}
     
     result = least_squares(compute_residuals,x0=x0,method='lm',kwargs=kwargs1)
 
@@ -427,17 +448,21 @@ def main(args):
     print(f"k1:{k1}")
     print(f"k2:{k2}")
 
-    #D = np.array([k1,k2, 0, 0] , np.float32)
-    #cv2_new_img = cv2.undistort(imgs[0],A_final,D)
-
     distorted_imgs = [inverse_warp(img,A_final,k1,k2) for img in imgs]
+#    for distorted_img,img_name in zip(distorted_imgs,imgs_names):
+#        cv2.imwrite(f"{base_path}/rectified/{img_name}.png",distorted_img)
 
 
     n_imgs = len(imgs)
     transformations = transformations.reshape((n_imgs,6)) # N x 6
-    projection_errors = [projection_error(x,A_final,k1,k2,img_corners,world_corners) for x,img_corners in zip(transformations,imgs_corners)]
+    projection_errors = [np.sum(projection_error(x,A_final,k1,k2,img_corners,world_corners)) for x,img_corners in zip(transformations,imgs_corners)]
 
-    #print(projection_errors)
+    m_hats = [get_projection(x,A_final,k1,k2,world_corners) for x in transformations]
+
+    for i,m_hat in enumerate(m_hats):
+        draw_circles(distorted_imgs[i],base_path,imgs_names[i],m_hat,imgs_corners[i])
+
+    print(projection_errors)
     if args.debug:
         test_homography(imgs,imgs_names,homography_list)
 
