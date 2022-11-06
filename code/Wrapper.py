@@ -51,6 +51,9 @@ def main(args):
     projection_errors_initial = compute_residuals(x0,imgs_corners,world_corners,True)
     projection_errors_final = compute_residuals(result.x,imgs_corners,world_corners,True)
 
+    projection_errors_initial = [error/world_corners.shape[0] for error in projection_errors_initial]
+    projection_errors_final = [error/world_corners.shape[0] for error in projection_errors_final]
+
     projections_final = get_projections(transformations_final,A_final,k1_final,k2_final,world_corners)
 
     for i,projection_final in enumerate(projections_final):
