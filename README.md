@@ -1,5 +1,7 @@
 Zhang's Camera Calibration
 ---
+Complete python implementation of camera intrinsics calibration module based on the [Zhang's seminal paper](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/tr98-71.pdf) on auto calibration
+
 ## Images before &amp; after rectification 
 <p float="middle">
   <img src="data/Calibration_Imgs/IMG_20170209_042616.jpg" width="250" hspace="20" />
